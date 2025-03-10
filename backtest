@@ -1,0 +1,4 @@
+start_date = datetime(2024, 1, 1)
+end_date = datetime(2024, 12, 31)
+results = bot.backtest(start_date, end_date)
+print(results)
