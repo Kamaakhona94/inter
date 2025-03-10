@@ -1,0 +1,6 @@
+MetaTrader5>=5.0.0
+pandas>=1.0.0
+numpy>=1.19.0
+pandas-ta>=0.3.14
+plotly>=5.0.0
+python-dotenv
