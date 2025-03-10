@@ -62,13 +62,16 @@ class GoldBot:
         self.server = server
         self.config = config
         self.logger = self._setup_logger()
+        
         self.sessions = {
             'asian': {'start': 1, 'end': 9},
             'london': {'start': 8, 'end': 16},
             'new_york': {'start': 13, 'end': 21}
         }
+        
         self.notify_email = os.getenv("NOTIFY_EMAIL")
         self.email_password = os.getenv("EMAIL_PASSWORD")
+        
         self.performance = PerformanceMetrics()
         self.error_stats = ErrorStats()
         self.max_consecutive_losses = 3
@@ -137,6 +140,7 @@ class GoldBot:
         if self.test_mode:
             self.logger.info(f"Test mode: Simulated price change {price_change:.2f}%")
             return
+        
         rates = mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, 100)
         if rates is None or len(rates) < 100:
             self.logger.warning("Insufficient data for analysis")
@@ -163,7 +167,9 @@ class GoldBot:
             self.logger.info(f"Test mode: Simulated {trade_type.upper()} trade")
             self.performance.total_trades += 1
             return
-        price = mt5.symbol_info_tick(self.config.symbol).ask if trade_type == "buy" else mt5.symbol_info_tick(self.config.symbol).bid
+        
+        price_info = mt5.symbol_info_tick(self.config.symbol)
+        price = price_info.ask if trade_type == "buy" else price_info.bid
         atr = self.calculate_indicators(pd.DataFrame(mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, self.config.atr_period + 1)))['atr'].iloc[-1]
 
         sl = price - (atr * 2) if trade_type == "buy" else price + (atr * 2)
@@ -242,6 +248,7 @@ class GoldBot:
         if self.test_mode:
             self.logger.info("Test mode: Simulated backtest")
             return {"total_trades": 0, "trades": []}
+        
         rates = mt5.copy_rates_range(self.config.symbol, self.config.timeframe, start_date, end_date)
         if rates is None or len(rates) < 100:
             self.logger.warning("Insufficient data for backtest")
@@ -311,11 +318,12 @@ class GoldBot:
                     'high': [1810, 1810],
                     'low': [1790, 1790],
                     'close': [1805, 1800]
-                }) if self.test_mode else mt5.copy_rates_from_pos(self.config.symbol, mt5.TIMEFRAME_H1, 0, 10)
+                }) if self.test_mode else mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, 10)
+                
                 if len(rates) > 1:
                     df = pd.DataFrame(rates)
                     price_change = ((df.iloc[0]['close'] - df.iloc[1]['close']) / 
-                                 df.iloc[1]['close'] * 100)
+                                     df.iloc[1]['close'] * 100)
                     
                     current_positions = 0 if self.test_mode else len(mt5.positions_get(symbol=self.config.symbol))
                     if current_positions == 0:
