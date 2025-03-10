@@ -1,0 +1,3 @@
+def toggle_pause(self):
+    self.pause_trading = not self.pause_trading
+    self.logger.info(f"Trading {'paused' if self.pause_trading else 'resumed'}")
