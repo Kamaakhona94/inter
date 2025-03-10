@@ -1,38 +1,311 @@
-name: "CodeQL Analysis"
+#!/usr/bin/env python3
+import logging
+import time
+import smtplib
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.mime.text import MIMEText
+from typing import Optional, Dict, Any, Tuple
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: '30 7 * * 5'  # Run weekly on Fridays at 07:30 UTC
+import MetaTrader5 as mt5
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
+import plotly.graph_objects as go
+from dotenv import load_dotenv
+import os
+from pynput import keyboard
 
-jobs:
-  analyze:
-    name: Analyze Python Code
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      packages: read
-      actions: read
-      contents: read
+@dataclass
+class Config:
+    symbol: str = "XAUUSD"
+    timeframe: int = mt5.TIMEFRAME_H1
+    lot_size: float = 0.1
+    max_daily_loss: float = -1000.0
+    check_interval: int = 60
+    chart_history_bars: int = 100
+    rsi_period: int = 14
+    ma_fast: int = 10
+    ma_slow: int = 20
+    atr_period: int = 14
+    scalping_enabled: bool = True
+    longterm_enabled: bool = True
 
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ "python" ]
+    def validate(self) -> bool:
+        return (self.lot_size > 0 and self.check_interval > 0 and 
+                self.chart_history_bars > 0 and self.rsi_period > 0)
 
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+@dataclass
+class PerformanceMetrics:
+    total_trades: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
+    consecutive_losses: int = 0
 
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: ${{ matrix.language }}
-        build-mode: none
-        queries: security-and-quality  # Use both security and quality queries
+@dataclass
+class ErrorStats:
+    consecutive_errors: int = 0
+    max_retries: int = 3
 
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+class GoldBot:
+    def __init__(self, account: int, password: str, server: str, config: Config):
+        if not config.validate():
+            raise ValueError("Invalid configuration")
+        
+        self.account = account
+        self.password = password
+        self.server = server
+        self.config = config
+        self.logger = self._setup_logger()
+        self.sessions = {
+            'asian': {'start': 1, 'end': 9},
+            'london': {'start': 8, 'end': 16},
+            'new_york': {'start': 13, 'end': 21}
+        }
+        self.notify_email = os.getenv("NOTIFY_EMAIL")
+        self.email_password = os.getenv("EMAIL_PASSWORD")
+        self.performance = PerformanceMetrics()
+        self.error_stats = ErrorStats()
+        self.max_consecutive_losses = 3
+        self.pause_trading = False
+
+    def _setup_logger(self):
+        logger = logging.getLogger('GoldBot')
+        logger.setLevel(logging.INFO)
+        console_handler = logging.StreamHandler()
+        file_handler = logging.FileHandler('gold_bot.log')
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+        return logger
+
+    def log_error(self, error_type: str, message: str, should_notify: bool = False):
+        self.logger.error(f"{error_type.capitalize()} Error: {message}")
+        self.error_stats.consecutive_errors += 1
+        if should_notify and self.notify_email and self.email_password:
+            self.send_error_notification(error_type, message)
+
+    def send_error_notification(self, error_type: str, message: str):
+        try:
+            msg = MIMEText(f"{error_type.capitalize()} Error in GoldBot:\n{message}")
+            msg['Subject'] = f"GoldBot {error_type.capitalize()} Error"
+            msg['From'] = self.notify_email
+            msg['To'] = self.notify_email
+
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(self.notify_email, self.email_password)
+                server.sendmail(self.notify_email, self.notify_email, msg.as_string())
+            self.logger.info("Error notification sent successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to send error notification: {str(e)}")
+
+    def initialize(self) -> bool:
+        self.logger.info("Initializing GoldBot...")
+        if not self.connect():
+            return False
+        self.logger.info("Initialization successful")
+        return True
+
+    def connect(self) -> bool:
+        if not mt5.initialize(login=self.account, password=self.password, server=self.server):
+            self.logger.error(f"MT5 initialization failed: {mt5.last_error()}")
+            return False
+        return True
+
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['rsi'] = ta.rsi(df['close'], length=self.config.rsi_period)
+        df['ma_fast'] = df['close'].rolling(window=self.config.ma_fast).mean()
+        df['ma_slow'] = df['close'].rolling(window=self.config.ma_slow).mean()
+        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=self.config.atr_period)
+        return df
+
+    def _handle_trading_signals(self, price_change: float):
+        rates = mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, 100)
+        if rates is None or len(rates) < 100:
+            self.logger.warning("Insufficient data for analysis")
+            return
+
+        df = pd.DataFrame(rates)
+        df = self.calculate_indicators(df)
+
+        if (self.config.scalping_enabled and df['rsi'].iloc[-1] > 70 and 
+            price_change < -0.5 and df['ma_fast'].iloc[-1] < df['ma_slow'].iloc[-1]):
+            self.execute_trade("sell")
+        elif (self.config.scalping_enabled and df['rsi'].iloc[-1] < 30 and 
+              price_change > 0.5 and df['ma_fast'].iloc[-1] > df['ma_slow'].iloc[-1]):
+            self.execute_trade("buy")
+        elif (self.config.longterm_enabled and df['rsi'].iloc[-1] < 20 and 
+              df['ma_fast'].iloc[-1] > df['ma_slow'].iloc[-1]):
+            self.execute_trade("buy", is_longterm=True)
+        elif (self.config.longterm_enabled and df['rsi'].iloc[-1] > 80 and 
+              df['ma_fast'].iloc[-1] < df['ma_slow'].iloc[-1]):
+            self.execute_trade("sell", is_longterm=True)
+
+    def execute_trade(self, trade_type: str, is_longterm: bool = False):
+        price = mt5.symbol_info_tick(self.config.symbol).ask if trade_type == "buy" else mt5.symbol_info_tick(self.config.symbol).bid
+        atr = self.calculate_indicators(pd.DataFrame(mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, self.config.atr_period + 1)))['atr'].iloc[-1]
+
+        sl = price - (atr * 2) if trade_type == "buy" else price + (atr * 2)
+        tp = price + (atr * 3) if trade_type == "buy" else price - (atr * 3)
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.config.symbol,
+            "volume": self.config.lot_size,
+            "type": mt5.ORDER_TYPE_BUY if trade_type == "buy" else mt5.ORDER_TYPE_SELL,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            self.logger.error(f"Trade execution failed: {result.comment}")
+        else:
+            self.logger.info(f"Trade executed: {trade_type.upper()} {self.config.symbol} at {price}")
+            self.performance.total_trades += 1
+
+    def calculate_daily_pnl(self) -> float:
+        history = mt5.history_deals_get(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0), datetime.now(timezone.utc))
+        if not history:
+            return 0.0
+
+        daily_pnl = sum(deal.profit for deal in history if deal.symbol == self.config.symbol)
+        return daily_pnl
+
+    def close_all_positions(self):
+        positions = mt5.positions_get(symbol=self.config.symbol)
+        for position in positions:
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.config.symbol,
+                "volume": position.volume,
+                "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "position": position.ticket,
+                "price": mt5.symbol_info_tick(self.config.symbol).bid if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(self.config.symbol).ask,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            mt5.order_send(request)
+
+    def update_chart(self):
+        rates = mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, self.config.chart_history_bars)
+        if rates is None or len(rates) < self.config.chart_history_bars:
+            self.logger.warning("Insufficient data for chart")
+            return
+
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        fig = go.Figure(data=[
+            go.Candlestick(
+                x=df['time'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close']
+            )
+        ])
+        fig.update_layout(title=f"{self.config.symbol} Candlestick Chart", xaxis_title="Time", yaxis_title="Price")
+        fig.write_html("gold_chart.html")
+        self.logger.info("Chart updated")
+
+    def backtest(self, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+        rates = mt5.copy_rates_range(self.config.symbol, self.config.timeframe, start_date, end_date)
+        if rates is None or len(rates) < 100:
+            self.logger.warning("Insufficient data for backtest")
+            return {}
+
+        df = pd.DataFrame(rates)
+        df = self.calculate_indicators(df)
+        trades = []
+
+        for i in range(1, len(df)):
+            if (self.config.scalping_enabled and df['rsi'].iloc[i] > 70 and 
+                df['ma_fast'].iloc[i] < df['ma_slow'].iloc[i]):
+                trades.append(("sell", df['close'].iloc[i]))
+            elif (self.config.scalping_enabled and df['rsi'].iloc[i] < 30 and 
+                  df['ma_fast'].iloc[i] > df['ma_slow'].iloc[i]):
+                trades.append(("buy", df['close'].iloc[i]))
+
+        return {"total_trades": len(trades), "trades": trades}
+
+    def calculate_performance_metrics(self) -> Dict[str, Any]:
+        return {
+            "total_trades": self.performance.total_trades,
+            "win_rate": (self.performance.winning_trades / self.performance.total_trades * 100) if self.performance.total_trades > 0 else 0,
+            "consecutive_losses": self.performance.consecutive_losses
+        }
+
+    def toggle_pause(self):
+        self.pause_trading = not self.pause_trading
+        self.logger.info(f"Trading {'paused' if self.pause_trading else 'resumed'}")
+
+    def on_press(self, key):
+        try:
+            if key.char == 'p':
+                self.toggle_pause()
+            elif key.char == 'r' and self.pause_trading:
+                self.toggle_pause()
+        except AttributeError:
+            pass
+
+    def run(self):
+        if not self.initialize():
+            self.log_error("initialization", "Failed to initialize bot", True)
+            return
+            
+        listener = keyboard.Listener(on_press=self.on_press)
+        listener.start()
+
+        while True:
+            try:
+                if self.pause_trading:
+                    self.logger.info("Trading paused. Press 'r' to resume or wait 300s...")
+                    time.sleep(300)
+                    continue
+
+                self.update_chart()
+                daily_pnl = self.calculate_daily_pnl()
+                if (daily_pnl < self.config.max_daily_loss or 
+                    self.performance.consecutive_losses >= self.max_consecutive_losses):
+                    self.logger.warning(f"Daily loss limit or max consecutive losses reached: ${daily_pnl:.2f}")
+                    self.close_all_positions()
+                    time.sleep(300)
+                    continue
+                    
+                rates = mt5.copy_rates_from_pos(self.config.symbol, mt5.TIMEFRAME_H1, 0, 10)
+                if len(rates) > 1:
+                    df = pd.DataFrame(rates)
+                    price_change = ((df.iloc[0]['close'] - df.iloc[1]['close']) / 
+                                 df.iloc[1]['close'] * 100)
+                    
+                    current_positions = len(mt5.positions_get(symbol=self.config.symbol))
+                    if current_positions == 0:
+                        self._handle_trading_signals(price_change)
+                        
+                self.error_stats.consecutive_errors = 0
+                        
+            except Exception as e:
+                self.log_error("runtime", str(e), True)
+                if "connection" in str(e).lower():
+                    if not self.connect():
+                        self.log_error("connection", "Failed to reconnect", True)
+                        break
+                time.sleep(10)
+                continue
+            
+            time.sleep(self.config.check_interval)
+
+if __name__ == "__main__":
+    config = Config()
+    load_dotenv()
+    account = int(os.getenv("MT5_ACCOUNT"))
+    password = os.getenv("MT5_PASSWORD")
+    server = os.getenv("MT5_SERVER")
+    
+    bot = GoldBot(account=account, password=password, server=server, config=config)
+    bot.run()
