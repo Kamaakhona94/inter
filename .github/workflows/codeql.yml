@@ -1,6 +1,7 @@
 import logging
 import time
 import smtplib
+import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
@@ -14,6 +15,11 @@ import plotly.graph_objects as go
 from dotenv import load_dotenv
 import os
 from pynput import keyboard
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="GoldBot - Automated Gold Trading Bot")
+parser.add_argument('--test', action='store_true', help='Run in test mode (no real trades)')
+args = parser.parse_args()
 
 @dataclass
 class Config:
@@ -67,6 +73,7 @@ class GoldBot:
         self.error_stats = ErrorStats()
         self.max_consecutive_losses = 3
         self.pause_trading = False
+        self.test_mode = args.test
 
     def _setup_logger(self):
         logger = logging.getLogger('GoldBot')
@@ -83,10 +90,13 @@ class GoldBot:
     def log_error(self, error_type: str, message: str, should_notify: bool = False):
         self.logger.error(f"{error_type.capitalize()} Error: {message}")
         self.error_stats.consecutive_errors += 1
-        if should_notify and self.notify_email and self.email_password:
+        if should_notify and self.notify_email and self.email_password and not self.test_mode:
             self.send_error_notification(error_type, message)
 
     def send_error_notification(self, error_type: str, message: str):
+        if self.test_mode:
+            self.logger.info("Test mode: Skipping email notification")
+            return
         try:
             msg = MIMEText(f"{error_type.capitalize()} Error in GoldBot:\n{message}")
             msg['Subject'] = f"GoldBot {error_type.capitalize()} Error"
@@ -108,6 +118,9 @@ class GoldBot:
         return True
 
     def connect(self) -> bool:
+        if self.test_mode:
+            self.logger.info("Test mode: Skipping MT5 connection")
+            return True
         if not mt5.initialize(login=self.account, password=self.password, server=self.server):
             self.logger.error(f"MT5 initialization failed: {mt5.last_error()}")
             return False
@@ -121,6 +134,9 @@ class GoldBot:
         return df
 
     def _handle_trading_signals(self, price_change: float):
+        if self.test_mode:
+            self.logger.info(f"Test mode: Simulated price change {price_change:.2f}%")
+            return
         rates = mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, 100)
         if rates is None or len(rates) < 100:
             self.logger.warning("Insufficient data for analysis")
@@ -143,6 +159,10 @@ class GoldBot:
             self.execute_trade("sell", is_longterm=True)
 
     def execute_trade(self, trade_type: str, is_longterm: bool = False):
+        if self.test_mode:
+            self.logger.info(f"Test mode: Simulated {trade_type.upper()} trade")
+            self.performance.total_trades += 1
+            return
         price = mt5.symbol_info_tick(self.config.symbol).ask if trade_type == "buy" else mt5.symbol_info_tick(self.config.symbol).bid
         atr = self.calculate_indicators(pd.DataFrame(mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, self.config.atr_period + 1)))['atr'].iloc[-1]
 
@@ -169,6 +189,9 @@ class GoldBot:
             self.performance.total_trades += 1
 
     def calculate_daily_pnl(self) -> float:
+        if self.test_mode:
+            self.logger.info("Test mode: Simulated PNL calculation")
+            return 0.0
         history = mt5.history_deals_get(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0), datetime.now(timezone.utc))
         if not history:
             return 0.0
@@ -177,6 +200,9 @@ class GoldBot:
         return daily_pnl
 
     def close_all_positions(self):
+        if self.test_mode:
+            self.logger.info("Test mode: Simulated closing all positions")
+            return
         positions = mt5.positions_get(symbol=self.config.symbol)
         for position in positions:
             request = {
@@ -192,20 +218,20 @@ class GoldBot:
             mt5.order_send(request)
 
     def update_chart(self):
-        rates = mt5.copy_rates_from_pos(self.config.symbol, self.config.timeframe, 0, self.config.chart_history_bars)
-        if rates is None or len(rates) < self.config.chart_history_bars:
-            self.logger.warning("Insufficient data for chart")
-            return
-
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
+        rates = pd.DataFrame({
+            'time': pd.date_range(start=datetime.now(), periods=self.config.chart_history_bars, freq='1H'),
+            'open': np.random.uniform(1800, 1900, self.config.chart_history_bars),
+            'high': np.random.uniform(1800, 1900, self.config.chart_history_bars),
+            'low': np.random.uniform(1800, 1900, self.config.chart_history_bars),
+            'close': np.random.uniform(1800, 1900, self.config.chart_history_bars)
+        })
         fig = go.Figure(data=[
             go.Candlestick(
-                x=df['time'],
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close']
+                x=rates['time'],
+                open=rates['open'],
+                high=rates['high'],
+                low=rates['low'],
+                close=rates['close']
             )
         ])
         fig.update_layout(title=f"{self.config.symbol} Candlestick Chart", xaxis_title="Time", yaxis_title="Price")
@@ -213,6 +239,9 @@ class GoldBot:
         self.logger.info("Chart updated")
 
     def backtest(self, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+        if self.test_mode:
+            self.logger.info("Test mode: Simulated backtest")
+            return {"total_trades": 0, "trades": []}
         rates = mt5.copy_rates_range(self.config.symbol, self.config.timeframe, start_date, end_date)
         if rates is None or len(rates) < 100:
             self.logger.warning("Insufficient data for backtest")
@@ -276,13 +305,19 @@ class GoldBot:
                     time.sleep(300)
                     continue
                     
-                rates = mt5.copy_rates_from_pos(self.config.symbol, mt5.TIMEFRAME_H1, 0, 10)
+                rates = pd.DataFrame({
+                    'time': [datetime.now(), datetime.now() - timezone.timedelta(hours=1)],
+                    'open': [1800, 1800],
+                    'high': [1810, 1810],
+                    'low': [1790, 1790],
+                    'close': [1805, 1800]
+                }) if self.test_mode else mt5.copy_rates_from_pos(self.config.symbol, mt5.TIMEFRAME_H1, 0, 10)
                 if len(rates) > 1:
                     df = pd.DataFrame(rates)
                     price_change = ((df.iloc[0]['close'] - df.iloc[1]['close']) / 
                                  df.iloc[1]['close'] * 100)
                     
-                    current_positions = len(mt5.positions_get(symbol=self.config.symbol))
+                    current_positions = 0 if self.test_mode else len(mt5.positions_get(symbol=self.config.symbol))
                     if current_positions == 0:
                         self._handle_trading_signals(price_change)
                         
@@ -290,7 +325,7 @@ class GoldBot:
                         
             except Exception as e:
                 self.log_error("runtime", str(e), True)
-                if "connection" in str(e).lower():
+                if "connection" in str(e).lower() and not self.test_mode:
                     if not self.connect():
                         self.log_error("connection", "Failed to reconnect", True)
                         break
@@ -302,9 +337,9 @@ class GoldBot:
 if __name__ == "__main__":
     config = Config()
     load_dotenv()
-    account = int(os.getenv("MT5_ACCOUNT"))
-    password = os.getenv("MT5_PASSWORD")
-    server = os.getenv("MT5_SERVER")
+    account = int(os.getenv("MT5_ACCOUNT", "0"))
+    password = os.getenv("MT5_PASSWORD", "")
+    server = os.getenv("MT5_SERVER", "")
     
     bot = GoldBot(account=account, password=password, server=server, config=config)
     bot.run()
