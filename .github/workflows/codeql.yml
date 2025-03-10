@@ -1,0 +1,55 @@
+# Welcome to the Inter Wiki!
+
+This is the central documentation hub for the **Inter Gold Trading Bot**, a Python-based automated trading system for gold (XAUUSD) on the MetaTrader 5 (MT5) platform. This wiki provides an overview, setup instructions, usage guides, tutorials, FAQs, and development resources.
+
+## Table of Contents
+- [Overview](#overview)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+- [Usage Guide](#usage-guide)
+- [Configuration Options](#configuration-options)
+- [Tutorials](#tutorials)
+- [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
+- [Development Notes](#development-notes)
+  - [Changelog](#changelog)
+  - [Roadmap](#roadmap)
+  - [CodeQL Integration](#codeql-integration)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Overview
+The Inter Gold Trading Bot (`gold_bot.py`) automates gold trading using MT5, leveraging technical indicators such as RSI, MACD, Stochastic, Bollinger Bands, and ATR. It supports scalping and long-term strategies with robust risk management, interactive charting, and backtesting capabilities.
+
+## Features
+- Real-time MT5 market data analysis.
+- Technical indicators (RSI, MACD, Stochastic, Bollinger Bands, ATR) for trade signals.
+- Scalping and long-term trading modes.
+- Dynamic stop-loss (SL) and take-profit (TP) calculations.
+- Risk management (daily loss limits, position sizing).
+- Interactive Plotly charts saved as `gold_chart.html`.
+- Backtesting functionality.
+- Logging to `gold_bot.log` and optional email notifications.
+- Pause/resume functionality (cross-platform with 'p' to pause, 'r' to resume).
+- CodeQL integration for security and quality analysis.
+
+## Getting Started
+
+### Requirements
+- Python 3.13 or later.
+- MetaTrader 5 terminal installed and configured.
+- Required Python packages:
+  - `MetaTrader5>=5.0.0`
+  - `pandas>=1.0.0`
+  - `numpy>=1.19.0`
+  - `pandas-ta>=0.3.14`
+  - `plotly>=5.0.0`
+  - `python-dotenv` (for environment variables)
+  - `pynput` (for cross-platform keyboard input)
+
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Kamaakhona94/inter.git
+   cd inter
