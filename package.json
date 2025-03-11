@@ -1,0 +1,12 @@
+{
+  "name": "inter",
+  "version": "1.0.0",
+  "description": "Webhook and WebSocket setup for gold price charting",
+  "main": "mt5-websocket-server.js",
+  "scripts": {
+    "start": "node mt5-websocket-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
