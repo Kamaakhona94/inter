@@ -1,6 +1,23 @@
-MetaTrader5>=5.0.0
-pandas>=1.0.0
-numpy>=1.19.0
-pandas-ta>=0.3.14
-plotly>=5.0.0
-python-dotenv
+# Flask for the webhook server (webhook_server.py)
+flask>=2.0.0
+
+# MetaTrader 5 library for gold_bot.py to interact with MetaTrader platform
+# Using the latest version as of March 2025 (5.0.45) to avoid compatibility issues
+MetaTrader5==5.0.45
+
+# Date utilities required by MetaTrader5, pinned to a compatible version
+python-dateutil>=2.8.2
+
+# WebSocket support for potential Python-based WebSocket clients (if needed)
+# Note: Node.js 'ws' package is used for mt5-websocket-server.js, but this is for Python if required
+# ws>=0.5  # Uncomment if you add WebSocket client functionality in Python
+
+# Additional utilities (optional, add based on your code)
+# requests for HTTP requests (if webhook_server.py makes external calls)
+requests>=2.25.1
+
+# pandas for data manipulation in gold_bot.py (if used for chart data)
+pandas>=1.3.0
+
+# matplotlib for plotting (if gold_chart.html generation involves Python plotting)
+matplotlib>=3.4.0
