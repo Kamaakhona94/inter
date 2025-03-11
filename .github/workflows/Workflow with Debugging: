@@ -40,12 +40,15 @@ jobs:
       - name: Debug pip installation
         if: failure()
         run: |
-          echo "Dependency installation failed. Checking environment..."
+          echo "Dependency installation failed. Debugging..."
+          dir
           python -m pip list
           python -m pip --version
-          dir
-          echo "Requirements file contents:"
           type requirements.txt 2> nul || echo "requirements.txt not found"
+          python --version
+          echo "Checking MetaTrader5 installation specifically..."
+          pip install MetaTrader5==5.0.45 || echo "Failed to install MetaTrader5==5.0.45"
+          pip install MetaTrader5 || echo "Failed to install latest MetaTrader5"
 
       # Run the test script
       - name: Run tests
@@ -64,6 +67,8 @@ jobs:
           echo "Checking Python environment:"
           python --version
           python -m pip list
+          echo "Checking if MetaTrader5 is importable..."
+          python -c "import MetaTrader5; print('MetaTrader5 imported successfully')" || echo "Failed to import MetaTrader5"
 
       # Upload artifacts (test results)
       - name: Upload artifacts
@@ -73,11 +78,9 @@ jobs:
           path: gold_chart.html
         continue-on-error: true
 
-      # Optional: Additional debug logging
-      - name: Additional debug information
+      # Final debug logging
+      - name: Final debug information
         if: always()
         run: |
           echo "Workflow completed with status: ${{ job.status }}"
           dir
-          echo "Environment variables:"
-          set
