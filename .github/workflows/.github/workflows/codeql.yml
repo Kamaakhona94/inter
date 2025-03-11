@@ -1,0 +1,5 @@
+cd C:\Projects\inter
+# Edit .github/workflows/codeql.yml in a text editor
+git add .github/workflows/codeql.yml
+git commit -m "Fix CodeQL workflow by removing duplication and completing jobs section"
+git push origin main
