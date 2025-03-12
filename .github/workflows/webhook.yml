@@ -6,26 +6,133 @@ on:
 
 jobs:
   run-webhook:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.13'
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-    - name: Install Node.js dependencies
-      run: npm install
-    - name: Start WebSocket server
-      run: node mt5-websocket-server.js &
-    - name: Start Flask server
-      run: python webhook_server.py &
-    - name: Run gold_bot.py
-      run: python gold_bot.py --test
+      # Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'  # Compatible with MetaTrader5
+
+      # Cache pip dependencies to speed up installation
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        shell: cmd
+        continue-on-error: false
+
+      # Debug dependency installation if it fails
+      - name: Debug pip installation
+        if: failure()
+        run: |
+          echo Dependency installation failed. Debugging...
+          dir
+          python -m pip list
+          python -m pip --version
+          type requirements.txt 2> nul || echo requirements.txt not found
+          python --version
+          echo Attempting to install MetaTrader5 separately...
+          pip install MetaTrader5>=5.0.0 || echo Failed to install MetaTrader5
+        shell: cmd
+
+      # Set up Node.js environment
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Install Node.js dependencies
+      - name: Install Node.js dependencies
+        run: npm install
+        shell: cmd
+        continue-on-error: false
+
+      # Debug Node.js installation if it fails
+      - name: Debug Node.js installation
+        if: failure()
+        run: |
+          echo Node.js dependency installation failed. Debugging...
+          dir node_modules
+          npm list
+          node --version
+          npm --version
+        shell: cmd
+
+      # Start WebSocket server
+      - name: Start WebSocket server
+        run: start /b node mt5-websocket-server.js
+        shell: cmd
+
+      # Debug WebSocket server if it fails
+      - name: Debug WebSocket server
+        if: failure()
+        run: |
+          echo WebSocket server failed. Debugging...
+          type mt5-websocket-server.js
+          netstat -a -n | find "3000"
+        shell: cmd
+
+      # Start Flask server
+      - name: Start Flask server
+        run: start /b python webhook_server.py
+        shell: cmd
+
+      # Debug Flask server if it fails
+      - name: Debug Flask server
+        if: failure()
+        run: |
+          echo Flask server failed. Debugging...
+          type webhook_server.py
+          netstat -a -n | find "5000"
+        shell: cmd
+
+      # Run gold_bot.py with test flag
+      - name: Run gold_bot.py
+        run: python gold_bot.py --test
+        shell: cmd
+        continue-on-error: false
+
+      # Debug gold_bot.py if it fails
+      - name: Debug gold_bot.py
+        if: failure()
+        run: |
+          echo gold_bot.py test failed. Debugging...
+          dir
+          type gold_bot.py
+          type gold_chart.html 2> nul || echo gold_chart.html not found
+          python --version
+          python -m pip list
+          python -c "import MetaTrader5; print('MetaTrader5 imported successfully')" || echo Failed to import MetaTrader5
+        shell: cmd
+
+      # Upload artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: gold_chart.html
+        continue-on-error: true
+
+      # Final debug logging
+      - name: Final debug information
+        if: always()
+        run: |
+          echo Workflow completed with status: ${{ job.status }}
+          dir
+          echo Environment variables:
+          set
+        shell: cmd
